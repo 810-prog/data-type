@@ -119,22 +119,7 @@
 
 # Write a function to display Sum of Even Numbers: 
 # Write a program that asks the user to enter a positive integer N. Use a while loop to iterate from 1 up to N. Inside the loop, use an if statement to check if the current number is even. If it is, add it to a running total. Finally, print the sum of all even numbers up to N.
-# def sum_of_even_numbers():
-#     N = int(input("Enter a positive integer N: "))
-#     total = 0
-#     i = 1
-#     while i <= N:
-#         if i % 2 == 0:
-#             total += i
-#         i += 1
-#     print(f"Sum of even numbers up to {N} is {total}")
-#     sum_of_even_numbers()
+
 
 # Write a function to display to find and print the smallest divisor of that number (excluding 1). Use an if-else statement to handle the case where the number itself is prime (its smallest divisor will be itself).
-def smallest_divisor(n):
-    if n <= 1:
-        return "Number should be greater than 1"
-    for i in range(2, n + 1):
-        if n % i == 0:
-            return i
-smallest_divisor()        
+     
