@@ -1,0 +1,311 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Sparkles, Camera, Play, Send, Loader2, Volume2, Mic2, RefreshCw } from 'lucide-react';
+
+const apiKey = "";
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'comedy-roast-app';
+
+const App = () => {
+  const [status, setStatus] = useState('Ready');
+  const [loading, setLoading] = useState(false);
+  const [subtitles, setSubtitles] = useState('');
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [heckle, setHeckle] = useState('');
+  const [imagePreview, setImagePreview] = useState(null);
+  const [petPeeve, setPetPeeve] = useState('');
+  const [suggestions, setSuggestions] = useState(['You look tired!', 'Tell a better joke!', 'Why so spicy?']);
+
+  // Exponential backoff fetch helper
+  const fetchWithRetry = async (url, options, retries = 5) => {
+    let delay = 1000;
+    for (let i = 0; i < retries; i++) {
+      try {
+        const response = await fetch(`${url}?key=${apiKey}`, options);
+        if (response.ok) return await response.json();
+      } catch (e) {}
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2;
+    }
+    throw new Error("Connection failed after retries.");
+  };
+
+  const playAudio = async (text, emotion = "witty") => {
+    try {
+      const result = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `Say in a ${emotion} female Indian accent: ${text}` }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } } }
+          }
+        })
+      });
+
+      const pcmData = result.candidates[0].content.parts[0].inlineData.data;
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      const binaryString = atob(pcmData);
+      const len = binaryString.length;
+      const bytes = new Int16Array(len / 2);
+      for (let i = 0; i < len; i += 2) {
+        bytes[i / 2] = (binaryString.charCodeAt(i + 1) << 8) | binaryString.charCodeAt(i);
+      }
+      
+      const audioBuffer = audioContext.createBuffer(1, bytes.length, 24000);
+      audioBuffer.getChannelData(0).set(Array.from(bytes).map(v => v / 32768));
+      
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContext.destination);
+      
+      return new Promise((resolve) => {
+        source.onended = resolve;
+        source.start();
+        setIsSpeaking(true);
+      });
+    } catch (e) {
+      console.error("Audio Error:", e);
+    } finally {
+      setIsSpeaking(false);
+    }
+  };
+
+  const performLine = async (hindiText, audioPrompt) => {
+    setSubtitles(hindiText);
+    await playAudio(audioPrompt || hindiText);
+    setSubtitles('');
+  };
+
+  const handleHeckle = async (overrideText) => {
+    const textToUse = overrideText || heckle;
+    if (!textToUse.trim()) return;
+    setLoading(true);
+    setStatus('Dealing with a hater...');
+    try {
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `A user heckled: "${textToUse}". Give a spicy 1-line Hindi comeback (Hinglish okay) as a standup comedian. Make it punchy.` }] }]
+        })
+      });
+      const reply = res.candidates[0].content.parts[0].text;
+      await performLine(reply, `Say mockingly and fast: ${reply}`);
+      updateSuggestions();
+    } finally {
+      setLoading(false);
+      setHeckle('');
+      setStatus('Ready');
+    }
+  };
+
+  // ✨ FEATURE 1: LLM-Powered Dynamic Routine Generator
+  const generateRoutine = async () => {
+    if (!petPeeve.trim()) return;
+    setLoading(true);
+    setStatus('Writing new jokes...');
+    try {
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `Write a 3-line standup comedy bit in Hindi about this pet peeve: "${petPeeve}". Make it angry, sarcastic, and funny. Respond as a JSON array of strings.` }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+      const lines = JSON.parse(res.candidates[0].content.parts[0].text);
+      for (const line of lines) {
+        await performLine(line);
+        await new Promise(r => setTimeout(r, 500));
+      }
+    } finally {
+      setLoading(false);
+      setPetPeeve('');
+      setStatus('Ready');
+    }
+  };
+
+  // ✨ FEATURE 2: Contextual Heckle Suggestions
+  const updateSuggestions = async () => {
+    try {
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `Generate 3 short, funny heckles a crowd might shout at a sarcastic female Indian comedian. Return as a JSON array of strings.` }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+      setSuggestions(JSON.parse(res.candidates[0].content.parts[0].text));
+    } catch (e) {
+      console.error("Suggestion Error:", e);
+    }
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => setImagePreview(reader.result);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const roastImage = async () => {
+    if (!imagePreview) return;
+    setLoading(true);
+    setStatus('Analyzing your vibe...');
+    try {
+      const base64Data = imagePreview.split(',')[1];
+      const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: "Roast this person's vibe in 2 lines of spicy Hindi. Mention a pet peeve based on what you see in the image (clutter, weird pose, etc.)." },
+              { inlineData: { mimeType: "image/png", data: base64Data } }
+            ]
+          }]
+        })
+      });
+      const roast = res.candidates[0].content.parts[0].text;
+      await performLine(roast, `Say with high energy and attitude: ${roast}`);
+    } finally {
+      setLoading(false);
+      setStatus('Ready');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-4 font-sans selection:bg-red-500/30">
+      <div className="w-full max-w-xl bg-zinc-900 rounded-3xl overflow-hidden shadow-2xl border border-zinc-800">
+        
+        {/* Stage View */}
+        <div className="relative h-72 bg-black flex flex-col items-center justify-center overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-b from-red-900/30 to-transparent pointer-events-none" />
+          
+          <div className={`w-32 h-32 rounded-full bg-zinc-800 border-4 border-red-500 flex items-center justify-center mb-4 transition-all duration-300 shadow-[0_0_30px_rgba(239,68,68,0.3)] ${isSpeaking ? 'scale-110' : 'scale-100'}`}>
+             <Volume2 className={isSpeaking ? 'text-red-500 animate-pulse' : 'text-zinc-600'} size={40} />
+          </div>
+
+          {subtitles && (
+            <div className="absolute bottom-6 left-4 right-4 bg-zinc-900/80 backdrop-blur-xl p-4 rounded-2xl border border-white/10 text-center shadow-2xl">
+              <p className="text-lg font-bold text-red-400 leading-tight">{subtitles}</p>
+            </div>
+          )}
+
+          {loading && (
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-50">
+              <Loader2 className="animate-spin text-red-500 mb-2" size={32} />
+              <p className="text-xs font-mono text-red-500 tracking-tighter uppercase">{status}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Interaction Panel */}
+        <div className="p-6 space-y-6">
+          <div className="flex justify-between items-center">
+            <h1 className="text-xl font-black flex items-center gap-2 tracking-tighter">
+              <Sparkles className="text-red-500" fill="currentColor" /> SPICY COMEDY AI
+            </h1>
+            <div className="flex items-center gap-2">
+               <div className={`w-2 h-2 rounded-full ${loading ? 'bg-yellow-500 animate-ping' : 'bg-green-500'}`} />
+               <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{status}</span>
+            </div>
+          </div>
+
+          {/* ✨ FEATURE 1: AI Routine Input */}
+          <div className="bg-zinc-800/50 p-4 rounded-2xl border border-zinc-700/50">
+            <p className="text-[10px] text-zinc-500 mb-2 uppercase font-black tracking-widest">✨ New Routine</p>
+            <div className="flex gap-2">
+              <input 
+                type="text" 
+                value={petPeeve}
+                onChange={(e) => setPetPeeve(e.target.value)}
+                placeholder="Name a pet peeve (e.g. slow drivers)..."
+                className="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+              <button 
+                onClick={generateRoutine}
+                disabled={loading || !petPeeve}
+                className="bg-red-600 hover:bg-red-500 disabled:opacity-50 p-2 rounded-xl transition-all shadow-lg active:scale-95"
+              >
+                <Mic2 size={20} />
+              </button>
+            </div>
+          </div>
+
+          {/* Heckle Section */}
+          <div>
+            <div className="flex gap-2 mb-3">
+              <input 
+                type="text" 
+                value={heckle}
+                onChange={(e) => setHeckle(e.target.value)}
+                placeholder="Heckle the comedian..."
+                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+              <button 
+                onClick={() => handleHeckle()}
+                disabled={loading || !heckle}
+                className="bg-zinc-100 text-black hover:bg-white disabled:opacity-50 p-2 rounded-xl transition-all active:scale-95"
+              >
+                <Send size={20} />
+              </button>
+            </div>
+            
+            {/* ✨ FEATURE 2: Suggestion Chips */}
+            <div className="flex flex-wrap gap-2">
+              {suggestions.map((s, i) => (
+                <button 
+                  key={i}
+                  onClick={() => handleHeckle(s)}
+                  disabled={loading}
+                  className="text-[10px] bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-zinc-700 px-3 py-1.5 rounded-full transition-all active:scale-95"
+                >
+                  ✨ {s}
+                </button>
+              ))}
+              <button onClick={updateSuggestions} className="p-1.5 text-zinc-600 hover:text-red-500 transition-colors">
+                <RefreshCw size={14} />
+              </button>
+            </div>
+          </div>
+
+          {/* Visual Roast */}
+          <div className="border-t border-zinc-800 pt-6">
+            <p className="text-[10px] text-zinc-500 mb-3 uppercase font-black tracking-widest">Photo Roast</p>
+            <div className="flex items-center gap-4">
+              <label className="flex-1 flex flex-col items-center justify-center border-2 border-dashed border-zinc-700 rounded-2xl p-4 hover:border-red-500/50 cursor-pointer transition-colors bg-zinc-800/50">
+                {imagePreview ? (
+                  <img src={imagePreview} className="h-16 w-16 object-cover rounded-lg ring-2 ring-red-500" alt="Preview" />
+                ) : (
+                  <>
+                    <Camera className="text-zinc-500 mb-1" size={20} />
+                    <span className="text-[10px] text-zinc-400 font-bold">Upload Vibe</span>
+                  </>
+                )}
+                <input type="file" className="hidden" onChange={handleImageUpload} accept="image/*" />
+              </label>
+              
+              <button 
+                onClick={roastImage}
+                disabled={loading || !imagePreview}
+                className="flex-[1.5] bg-red-600 text-white font-black h-full rounded-2xl hover:bg-red-500 disabled:opacity-50 transition-all flex flex-col items-center justify-center gap-1 py-6 shadow-lg shadow-red-900/20"
+              >
+                <div className="flex items-center gap-2">
+                  <Sparkles size={18} fill="currentColor" />
+                  <span>ROAST ME</span>
+                </div>
+                <span className="text-[8px] opacity-70 tracking-[0.2em]">LLM ANALYSIS</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;
